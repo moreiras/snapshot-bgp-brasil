@@ -1,0 +1,729 @@
+Perfeito. Abaixo está **o prompt completo, detalhado e pronto para uso no CODEX**, escrito para **maximizar a chance de gerar código correto, organizado e sustentável**, sem decisões implícitas ou ambiguidades.
+
+Você pode **copiar e colar exatamente como está** no Codex.
+
+---
+
+## 📌 PROMPT PARA O CODEX
+
+Você é um engenheiro de software experiente, com forte conhecimento em **Python, redes, BGP, Docker, PostgreSQL, PostGIS e engenharia de dados**.
+Seu objetivo é gerar a **primeira versão funcional** de um ambiente e software para **coleta, persistência e análise inicial de dados BGP**, conforme descrito abaixo.
+
+### 🎯 Objetivo geral
+
+Criar um ambiente Dockerizado e um software em Python capaz de:
+
+1. Criar e subir a infraestrutura (PostgreSQL + PostGIS + pgAdmin + container Python).
+2. Inicializar o banco de dados usando um **schema SQL já existente no repositório**.
+3. Coletar dados de múltiplas fontes de rede (BGP, FTP, DNS).
+4. Armazenar os dados brutos localmente (texto) **antes** de analisá-los.
+5. Processar os dados e popular o banco para **um único snapshot**.
+6. Garantir idempotência diária (não baixar novamente dados já coletados no mesmo dia).
+7. Popular corretamente as tabelas de relacionamento quando dados já existirem.
+
+Esta primeira versão **não precisa ser otimizada**, mas deve ser **correta, legível, modular e extensivamente comentada**.
+
+---
+
+## 🧱 Infraestrutura (Docker)
+
+### Requisitos gerais
+
+* Usar **Docker** e **docker-compose**
+
+* Criar os seguintes containers:
+
+  1. **PostgreSQL** com **PostGIS**
+  2. **pgAdmin** para administração gráfica do banco
+  3. **Python 3.12** para executar o software
+
+* O ambiente será executado:
+
+  * em desenvolvimento local
+  * em produção, atrás de um **nginx externo** (não precisa criar nginx aqui)
+
+---
+
+### Docker / Compose – Requisitos específicos
+
+* Criar:
+
+  * `Dockerfile` para o container Python
+  * `docker-compose.yml` com os 3 serviços
+* Usar volumes para:
+
+  * persistência do banco
+  * persistência de dados brutos coletados (BGP, FTP)
+* Configurar variáveis via **arquivo `.env`**:
+
+  * credenciais do banco
+  * caminhos de dados
+  * parâmetros de conexão com LGs
+* Expor:
+
+  * PostgreSQL
+  * pgAdmin
+
+---
+
+## 🗄️ Banco de Dados
+
+* Banco: **PostgreSQL + PostGIS**
+* O **schema SQL já existe no repositório** (não recriar o modelo).
+* Criar scripts para:
+
+  * inicializar o banco
+  * aplicar o schema na primeira subida
+* O software deve **apenas inserir dados**, não modificar o schema.
+
+---
+
+## 🐍 Software (Python)
+
+### Versão e estilo
+
+* Python **3.12**
+* Código:
+
+  * modular
+  * legível
+  * extensivamente comentado
+* Funções, classes e comentários **em inglês**
+* Não usar ORM pesado
+
+  * Preferir **SQLAlchemy Core** ou SQL explícito
+* PostGIS deve ser usado via SQL (ex: `ST_DWithin`)
+
+---
+
+### Forma de execução
+
+Criar uma **CLI única**, por exemplo:
+
+```bash
+python main.py \
+  --snapshot-date 2025-09-01 \
+  --bgp-sources ixp_df,global \
+  --load-registrobr
+```
+
+A CLI deve permitir:
+
+* escolher quais fontes BGP baixar
+* executar apenas partes do pipeline (ex: só BGP, só Registro.br)
+
+---
+
+## 🌐 Fontes de dados (v1)
+
+### 1. Looking Glass – BGP
+
+Implementar coleta via **telnet**, salvando o output bruto em arquivo texto.
+
+Fontes iniciais obrigatórias:
+
+* `lg.df.ix.br` → IX.br Brasília
+* `lg.registro.br` → tabela global
+
+Regras:
+
+* salvar arquivos em diretórios organizados por data
+* se o arquivo do **mesmo dia já existir**, **não baixar novamente**
+* somente depois analisar o arquivo e popular o banco
+
+---
+
+### 2. Registro.br – FTP
+
+Fonte:
+
+```
+https://ftp.registro.br/pub/numeracao/origin/nicbr-asn-blk-latest.txt
+```
+
+Regras:
+
+* baixar o arquivo
+* salvar localmente com data
+* se já existir para o mesmo dia, não baixar novamente
+* usar os dados para:
+
+  * identificar ASNs brasileiros
+  * associar ASN ↔ prefixos
+  * preencher campos de ASN no banco
+
+---
+
+### 3. Team Cymru – IP to ASN
+
+* Usar **DNS-based lookup**
+* Utilizar apenas para **ASNs não brasileiros**
+* Implementar como módulo separado
+* Ser usado durante o processamento de prefixos
+
+Documentação:
+[https://www.team-cymru.com/ip-asn-mapping](https://www.team-cymru.com/ip-asn-mapping)
+
+---
+
+### 4. MaxMind (base local)
+
+* Usar base local (assumir caminho configurável via `.env`)
+* Utilizar para:
+
+  * geolocalizar prefixos expandidos
+* IPv4:
+
+  * normalizar sempre para **/24**
+* IPv6:
+
+  * expandir conforme necessidade (tamanho variável), verificando os subprefixos existentes na tabela da maxmind
+  * se não houver granularidade, usar o prefixo original
+
+---
+
+## 🔁 Lógica de processamento
+
+* Criar **1 snapshot**
+* Processar fontes **uma a uma**
+* Ao inserir dados:
+
+  * se um objeto já existir no snapshot, **não recriar**
+  * apenas atualizar tabelas de relacionamento
+* O snapshot deve ser inserido no banco antes do processamento
+
+---
+
+## 🧩 Estrutura esperada do projeto
+
+Sugestão (pode adaptar, mas manter modularidade):
+
+```
+.
+├── docker/
+│   ├── Dockerfile
+│   └── docker-compose.yml
+├── db/
+│   └── schema.sql
+├── data/
+│   ├── raw/
+│   │   ├── bgp/
+│   │   └── registrobr/
+│   └── processed/
+├── src/
+│   ├── main.py
+│   ├── config.py
+│   ├── db.py
+│   ├── snapshot.py
+│   ├── ingest/
+│   │   ├── bgp_lg.py
+│   │   ├── registrobr.py
+│   │   ├── cymru.py
+│   │   └── maxmind.py
+│   └── utils/
+│       ├── logging.py
+│       └── filesystem.py
+└── .env.example
+```
+
+---
+
+## ✅ Entregáveis esperados
+
+O código gerado deve incluir:
+
+* Dockerfile
+* docker-compose.yml
+* exemplo de `.env`
+* código Python funcional
+* comentários explicativos
+* README básico explicando como rodar o ambiente e o pipeline
+
+---
+
+## ⚠️ Restrições importantes
+
+* Não inventar novas tabelas além do schema existente
+* Não usar frameworks web
+* Não assumir paralelismo (v1 é sequencial)
+* Priorizar clareza sobre performance
+
+---
+
+## 🧠 Mentalidade esperada
+
+Pense como um engenheiro de redes e dados:
+
+* BGP é imperfeito
+* dados podem ser duplicados
+* fontes divergem
+* rastreabilidade é importante
+
+O foco desta versão é **confiabilidade e base sólida**, não sofisticação.
+
+---
+
+Sim — **faltou**, e você está certo em apontar isso 👍
+Para o Codex gerar algo realmente correto (e não “chutar” lógica), **a semântica do schema e a regra de povoamento são essenciais**.
+
+A boa notícia: isso é **fácil de corrigir** adicionando **uma seção explícita no prompt**, explicando:
+
+1. o papel de cada tabela
+2. **como ela é alimentada a partir das fontes BGP / FTP / DNS / MaxMind**
+3. a ordem lógica de ingestão
+
+Abaixo eu te entrego **um bloco pronto**, para você **colar diretamente no prompt do Codex**, logo após a descrição do schema.
+
+---
+
+## 📌 BLOCO A SER ADICIONADO AO PROMPT DO CODEX
+
+### (Semântica do Schema SQL e Regras de Povoamento)
+
+### 🧠 Visão geral conceitual
+
+O banco de dados é **orientado a snapshots**.
+Cada snapshot representa uma visão consistente da Internet **em um determinado dia**, obtida a partir de múltiplas fontes.
+
+Nenhuma tabela representa “estado histórico contínuo”.
+Se um ASN, prefixo ou relação **não aparece em um snapshot**, ele **simplesmente não existe naquele snapshot**.
+
+Redundância é intencional e aceitável para garantir:
+
+* queries simples
+* alta performance
+* semântica explícita
+
+---
+
+## 📂 Tabelas e Semântica
+
+### 1. `snapshot`
+
+**O que representa**
+Um snapshot lógico de coleta.
+
+**Como popular**
+
+* Inserir **uma linha no início da execução**
+* Usar `snapshot_id` como chave para TODAS as inserções subsequentes
+
+---
+
+### 2. `source`
+
+**O que representa**
+Uma fonte BGP onde prefixos foram observados.
+
+Pode ser:
+
+* um IXP (ex: `lg.df.ix.br`)
+* uma tabela global (ex: `lg.registro.br`)
+
+**Como popular**
+
+* Uma linha por source usada no snapshot
+* Preencher antes de processar BGP
+* `location` representa a localização física do IXP ou do coletor da tabela global
+
+---
+
+### 3. `asn`
+
+**O que representa**
+Todos os ASNs que aparecem no snapshot, de qualquer forma.
+
+Um ASN deve ser inserido se:
+
+* aparece no AS_PATH
+* aparece como origem de prefixo
+* aparece como anunciante direto
+* aparece como peer de uma source
+
+**Como popular**
+
+* Extrair ASNs de:
+
+  * AS_PATH do BGP
+  * lista do Registro.br
+  * respostas do Team Cymru
+* Consolidar dados:
+
+  * nome
+  * país
+  * CNPJ (quando aplicável)
+
+---
+
+### 4. `prefix` (prefixos originais)
+
+**O que representa**
+Prefixos **exatamente como vistos no BGP**, sem normalização.
+
+Essa tabela é **bruta**, podendo conter:
+
+* repetição do mesmo prefixo
+* múltiplos AS_PATHs
+* múltiplas sources
+
+**Como popular**
+
+* Para cada entrada BGP:
+
+  * inserir `(prefix, source_id, as_path)`
+* Não tentar deduplicar
+* Esta tabela é a base de rastreabilidade
+
+---
+
+### 5. `prefix_asn`
+
+**O que representa**
+Relação explícita entre prefixos originais e ASNs, **tipada**.
+
+Tipos de relação:
+
+* `origin` → último ASN do AS_PATH
+* `announce` → primeiro ASN do AS_PATH
+
+**Como popular**
+
+* Para cada entrada em `prefix`:
+
+  * extrair primeiro ASN → `announce`
+  * extrair último ASN → `origin`
+* Inserir **linhas separadas** quando um ASN exercer ambos os papéis
+
+---
+
+### 6. `prefix_expanded`
+
+**O que representa**
+Prefixos **normalizados e/ou expandidos**, usados para:
+
+* geolocalização
+* mapas
+* contagens
+* análises espaciais
+
+Regras:
+
+* IPv4 → sempre normalizar para `/24`
+* IPv6 → expandir conforme granularidade da base geográfica
+* MOAS → múltiplas linhas
+
+**Como popular**
+
+* A partir dos prefixos originais:
+
+  * expandir
+  * associar `origin_asn`
+  * aplicar geolocalização (MaxMind)
+* Essa tabela **não armazena AS_PATH**
+
+---
+
+### 7. `prefix_expanded_map`
+
+**O que representa**
+Rastreabilidade entre prefixos expandidos e os prefixos originais dos quais derivam.
+
+**Como popular**
+
+* Para cada prefixo expandido:
+
+  * inserir relação com TODOS os prefixos originais que o originaram
+  * manter referência à source
+
+---
+
+### 8. `asn_source`
+
+**O que representa**
+Relação explícita entre ASNs e sources BGP.
+
+Tipos de relação:
+
+* `peer` → existe sessão BGP direta com a source
+* `origin` → ASN aparece como origem de prefixos naquela source
+
+**Como popular**
+
+* `peer`:
+
+  * ASN aparece como vizinho direto na tabela BGP da source
+* `origin`:
+
+  * ASN aparece como `origin` em `prefix_asn` naquela source
+* Um ASN pode ter **ambas as relações**, em linhas distintas
+
+---
+
+## 🔄 Ordem recomendada de ingestão
+
+Para cada snapshot:
+
+1. Criar snapshot
+2. Criar sources
+3. Ler BGP bruto (salvar em disco)
+4. Popular:
+
+   * `prefix`
+   * `prefix_asn`
+5. Popular:
+
+   * `asn`
+6. Expandir prefixos e geolocalizar:
+
+   * `prefix_expanded`
+   * `prefix_expanded_map`
+7. Criar relações:
+
+   * `asn_source`
+
+---
+
+## 🧩 Princípio fundamental
+
+> **Nada é inferido em query. Tudo é explícito no dado.**
+
+Isso garante:
+
+* clareza
+* performance
+* facilidade de debug
+* visualizações simples
+
+---
+
+
+Perfeito — esse é **o último pedaço conceitual que faltava mesmo**.
+Sem isso, o Codex inevitavelmente ia “inventar” parsing de BGP e regras de expansão.
+
+Vou responder em **duas partes bem objetivas**, já no formato que você pode **colar como mais um bloco no prompt do Codex**:
+
+1. **como extrair informação da tabela BGP (sem ambiguidade)**
+2. **regras exatas de expansão de prefixos (IPv4 e IPv6)**
+
+Nada de teoria genérica, só o que você realmente vai implementar.
+
+---
+
+## 📌 BLOCO ADICIONAL PARA O PROMPT DO CODEX
+
+### (Semântica da Tabela BGP e Regras de Expansão de Prefixos)
+
+---
+
+## 1️⃣ Como interpretar e extrair informações da tabela BGP
+
+### 1.1 Formato esperado da tabela BGP
+
+As tabelas BGP coletadas via Looking Glass (telnet) devem ser tratadas como **texto bruto**, contendo linhas que representam rotas BGP, tipicamente com:
+
+* prefixo anunciado
+* AS_PATH
+* indicadores de rota válida / selecionada
+
+Exemplo conceitual (varia por LG):
+
+```
+*> 200.160.0.0/16  187.16.217.1  0  100  0  22548  7738 i
+*> 2804:10::/32   ::             0  100  0  22548 i
+```
+
+O software **não deve assumir layout fixo por coluna**, mas sim:
+
+* identificar **prefixos IPv4 e IPv6 via regex**
+* identificar **AS_PATH como sequência de ASNs**
+* ignorar linhas que não contenham prefixo válido
+
+---
+
+### 1.2 Extração de dados a partir de cada linha válida
+
+Para **cada rota BGP válida**, extrair:
+
+| Elemento                    | Regra                                              |
+| --------------------------- | -------------------------------------------------- |
+| Prefixo original            | Primeiro token que corresponde a IPv4 ou IPv6 CIDR |
+| AS_PATH                     | Sequência de números ASN na ordem apresentada      |
+| ASN anunciante (`announce`) | **Primeiro ASN** do AS_PATH                        |
+| ASN de origem (`origin`)    | **Último ASN** do AS_PATH                          |
+| Source                      | LG onde a tabela foi coletada                      |
+| Snapshot                    | Snapshot atual                                     |
+
+---
+
+### 1.3 Popular tabelas a partir do BGP bruto
+
+Para cada linha BGP válida:
+
+#### Tabela `prefix`
+
+* Inserir:
+
+  * `prefix` (CIDR original)
+  * `source_id`
+  * `as_path` (string completa, sem processamento)
+* **Não deduplicar** (repetição é esperada e desejada)
+
+---
+
+#### Tabela `prefix_asn`
+
+* Inserir uma linha com:
+
+  * `relation_type = 'announce'`
+  * `asn = primeiro ASN do AS_PATH`
+* Inserir uma linha com:
+
+  * `relation_type = 'origin'`
+  * `asn = último ASN do AS_PATH`
+* Se forem iguais, **inserir ambas as relações**
+
+---
+
+#### Tabela `asn`
+
+* Inserir ASN se ainda não existir no snapshot:
+
+  * ASN anunciante
+  * ASN de origem
+  * quaisquer ASNs intermediários do AS_PATH (opcional, mas recomendado)
+
+---
+
+#### Tabela `asn_source`
+
+* Inserir:
+
+  * `(asn, source, 'origin')` → se ASN aparecer como origin em qualquer prefixo da source
+  * `(asn, source, 'peer')` → se ASN aparecer como **primeiro ASN** do AS_PATH na source
+
+> Observação: nesta versão inicial, considere o primeiro ASN do AS_PATH como “peer” da source.
+
+---
+
+## 2️⃣ Regras de expansão de prefixos
+
+A expansão de prefixos ocorre **após** o parsing completo do BGP bruto.
+
+Ela serve **exclusivamente** para:
+
+* geolocalização
+* mapas
+* análises espaciais
+
+---
+
+## 2.1 Regras para IPv4
+
+### Regra única (simples e fixa)
+
+> **Todo prefixo IPv4 deve ser expandido para blocos /24.**
+
+Exemplos:
+
+| Prefixo original | Prefixos expandidos               |
+| ---------------- | --------------------------------- |
+| 200.160.0.0/16   | 200.160.0.0/24 … 200.160.255.0/24 |
+| 187.16.0.0/20    | 187.16.0.0/24 … 187.16.15.0/24    |
+| 8.8.8.0/24       | 8.8.8.0/24                        |
+
+---
+
+### Popular tabelas
+
+#### `prefix_expanded`
+
+* Para cada /24:
+
+  * `prefix_exp = /24`
+  * `origin_asn = ASN de origem`
+  * aplicar geolocalização via MaxMind
+* **Não repetir prefixos expandidos já inseridos no snapshot**
+
+---
+
+#### `prefix_expanded_map`
+
+* Relacionar **cada /24** ao prefixo original que o gerou
+* Manter referência à source
+
+---
+
+## 2.2 Regras para IPv6
+
+IPv6 **não tem tamanho fixo de expansão**.
+
+### Regra geral
+
+1. Tentar geolocalizar o **prefixo original**
+2. Se a base de geolocalização retornar:
+
+   * **um único resultado** → usar o prefixo original
+   * **múltiplas localizações internas** → subdividir o prefixo
+
+---
+
+### Regra prática de subdivisão
+
+* Subdividir progressivamente até:
+
+  * `/48` **ou**
+  * o menor prefixo onde a geolocalização seja única
+* Se não for possível obter granularidade:
+
+  * usar o prefixo original
+
+Exemplo:
+
+| Prefixo original | Resultado          |
+| ---------------- | ------------------ |
+| 2804:10::/32     | vários /48         |
+| 2a00::/29        | manter /29         |
+| 2001:db8::/32    | subdividir até /48 |
+
+---
+
+### Popular tabelas
+
+#### `prefix_expanded`
+
+* Para cada prefixo IPv6 expandido:
+
+  * `prefix_exp`
+  * `origin_asn`
+  * geolocalização
+* MOAS → múltiplas linhas
+
+---
+
+#### `prefix_expanded_map`
+
+* Relacionar cada prefixo expandido ao prefixo original
+* Manter referência à source
+
+---
+
+## 3️⃣ Princípios importantes (para o Codex)
+
+* **Nunca inferir dados em query**
+* **Nunca sobrescrever dados brutos**
+* **Toda relação deve ser explícita**
+* **Prefixo expandido nunca substitui o original**
+* **Rastreabilidade é obrigatória**
+
+---
+
+## 🧠 Resumo em uma frase
+
+> A tabela BGP é tratada como verdade bruta;
+> prefixos originais garantem rastreabilidade;
+> prefixos expandidos existem apenas para análise e geografia.
+
+---
+
+Gere agora o sistema.
+
